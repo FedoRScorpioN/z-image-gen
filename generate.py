@@ -18,6 +18,7 @@ DEFAULT_HEIGHT = 512
 
 # URLs
 SD_CLI_URL = "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-504-636d3cb/sd-master-636d3cb-bin-win-cuda12-x64.zip"
+CUDA_DLL_URL = "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-504-636d3cb/cudart-sd-bin-win-cu12-x64.zip"
 
 # Model URLs (correct sources)
 MODEL_URLS = {
@@ -143,6 +144,7 @@ def check_installation():
     diffusion = base / "models" / "z_image_turbo-Q4_0.gguf"
     vae = base / "models" / "ae.safetensors"
     llm = base / "models" / "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+    cudart = base / "bin" / "cudart_12.dll"
     
     print("\nChecking installation...")
     all_ok = True
@@ -153,6 +155,14 @@ def check_installation():
         print(f"  [OK] sd-cli.exe: {size_mb:.1f} MB ({sd_cli.relative_to(base)})")
     else:
         print(f"  [MISSING] sd-cli.exe")
+        all_ok = False
+    
+    # Check CUDA runtime
+    if cudart.exists():
+        size_mb = cudart.stat().st_size / (1024 * 1024)
+        print(f"  [OK] CUDA runtime: {size_mb:.1f} MB")
+    else:
+        print(f"  [MISSING] cudart_12.dll - run with --install")
         all_ok = False
     
     # Check models
@@ -190,13 +200,13 @@ def install():
     # Download sd-cli
     sd_cli = find_sd_cli(base)
     if not sd_cli:
-        print("\n[1/4] Downloading sd-cli (CUDA 12 for Windows)...")
+        print("\n[1/5] Downloading sd-cli (CUDA 12 for Windows)...")
         zip_path = base / "sd-cli.zip"
-        
+
         if not download_file(SD_CLI_URL, zip_path, "stable-diffusion.cpp"):
             print("Failed to download sd-cli!")
             return False
-        
+
         print("\nExtracting...")
         try:
             with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -206,7 +216,7 @@ def install():
         except Exception as e:
             print(f"  ERROR extracting: {e}")
             return False
-        
+
         sd_cli = find_sd_cli(base)
         if sd_cli:
             print(f"  Found sd-cli.exe at: {sd_cli.relative_to(base)}")
@@ -216,7 +226,29 @@ def install():
                 if f.is_file():
                     print(f"    {f.relative_to(bin_dir)}")
     else:
-        print(f"\n[1/4] sd-cli.exe already exists")
+        print(f"\n[1/5] sd-cli.exe already exists")
+
+    # Download CUDA runtime DLLs
+    cudart_dll = bin_dir / "cudart_12.dll"
+    if not cudart_dll.exists():
+        print("\n[2/5] Downloading CUDA runtime DLLs...")
+        cuda_zip = base / "cuda-dlls.zip"
+
+        if not download_file(CUDA_DLL_URL, cuda_zip, "CUDA runtime"):
+            print("Failed to download CUDA DLLs!")
+            return False
+
+        print("\nExtracting CUDA DLLs...")
+        try:
+            with zipfile.ZipFile(cuda_zip, 'r') as zf:
+                zf.extractall(bin_dir)
+            cuda_zip.unlink()
+            print("  Done!")
+        except Exception as e:
+            print(f"  ERROR extracting CUDA DLLs: {e}")
+            return False
+    else:
+        print(f"\n[2/5] CUDA runtime DLLs already exist")
     
     # Download models
     models = [
@@ -224,15 +256,15 @@ def install():
         ("VAE", MODEL_URLS["vae"], "ae.safetensors"),
         ("LLM/text encoder", MODEL_URLS["llm"], "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
     ]
-    
-    for i, (name, url, filename) in enumerate(models, 2):
+
+    for i, (name, url, filename) in enumerate(models, 3):
         dest = models_dir / filename
-        
+
         if dest.exists() and dest.stat().st_size > 1000000:
             size_mb = dest.stat().st_size / (1024 * 1024)
-            print(f"\n[{i}/4] {name} already exists ({size_mb:.0f} MB)")
+            print(f"\n[{i}/5] {name} already exists ({size_mb:.0f} MB)")
         else:
-            print(f"\n[{i}/4] Downloading {name}...")
+            print(f"\n[{i}/5] Downloading {name}...")
             if not download_file(url, dest, name):
                 print(f"  WARNING: Failed to download {name}")
     
