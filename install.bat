@@ -1,287 +1,249 @@
 @echo off
-chcp 65001 >nul
-title Z-Image Generator - Auto Installer
+chcp 65001 >nul 2>&1
+title Z-Image Generator - Installer
 
 echo.
-echo ╔═══════════════════════════════════════════════════════════════╗
-echo ║           Z-Image Generator - Auto Installer                  ║
-echo ║           Optimized for 4GB VRAM                              ║
-echo ╚═══════════════════════════════════════════════════════════════╝
+echo ===============================================================
+echo            Z-Image Generator - Auto Installer
+echo            Optimized for 4GB VRAM
+echo ===============================================================
 echo.
-
-:: Check for admin rights (needed for some installations)
-net session >nul 2>&1
-if %errorLevel% neq 0 (
-    echo [!] Requesting administrator privileges...
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
-    exit /b
-)
 
 :: Set installation directory
 set "INSTALL_DIR=%LOCALAPPDATA%\z-image-gen"
 set "MODEL_DIR=%INSTALL_DIR%\models"
 set "VENV_DIR=%INSTALL_DIR%\venv"
 
-echo [*] Installation directory: %INSTALL_DIR%
+echo [INFO] Installation directory: %INSTALL_DIR%
 echo.
 
 :: Step 1: Check Python
 echo [1/6] Checking Python installation...
-python --version >nul 2>&1
+where python >nul 2>&1
 if %errorLevel% neq 0 (
-    echo [!] Python not found. Installing Python 3.11...
-    
-    :: Download Python installer
-    powershell -Command "& {Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.7/python-3.11.7-amd64.exe' -OutFile '%TEMP%\python_installer.exe'}"
-    
-    :: Install Python silently with pip and CUDA support options
-    echo [*] Installing Python (this may take a minute)...
-    %TEMP%\python_installer.exe /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1 Include_test=0
-    timeout /t 60 /nobreak >nul
-    
-    :: Refresh environment
-    call refreshenv >nul 2>&1
-    
-    python --version >nul 2>&1
-    if %errorLevel% neq 0 (
-        echo [ERROR] Python installation failed!
-        echo Please install Python manually from https://www.python.org/downloads/
-        pause
-        exit /b 1
-    )
+    echo [ERROR] Python not found!
+    echo.
+    echo Please install Python 3.10+ from:
+    echo https://www.python.org/downloads/
+    echo.
+    echo Make sure to check "Add Python to PATH" during installation.
+    echo.
+    goto :error
 )
-echo [✓] Python found:
+echo [OK] Python found:
 python --version
 echo.
 
-:: Step 2: Check NVIDIA GPU and CUDA
-echo [2/6] Checking NVIDIA GPU...
-nvidia-smi >nul 2>&1
+:: Step 2: Check pip
+echo [2/6] Checking pip...
+python -m pip --version >nul 2>&1
 if %errorLevel% neq 0 (
-    echo [!] NVIDIA GPU not detected or drivers not installed!
-    echo [!] This tool requires an NVIDIA GPU with CUDA support.
-    echo.
-    echo Please install NVIDIA drivers from: https://www.nvidia.com/Download/index.aspx
-    pause
-    exit /b 1
+    echo [ERROR] pip not found!
+    echo Please reinstall Python with pip included.
+    goto :error
 )
-echo [✓] NVIDIA GPU detected:
-nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+echo [OK] pip available
 echo.
 
-:: Step 3: Create installation directory
-echo [3/6] Creating installation directory...
+:: Step 3: Check NVIDIA GPU
+echo [3/6] Checking NVIDIA GPU...
+where nvidia-smi >nul 2>&1
+if %errorLevel% neq 0 (
+    echo [WARNING] nvidia-smi not found in PATH
+    echo [INFO] Trying common locations...
+    
+    if exist "C:\Windows\System32\nvidia-smi.exe" (
+        "C:\Windows\System32\nvidia-smi.exe" --query-gpu=name --format=csv,noheader 2>nul
+        if %errorLevel% equ 0 (
+            echo [OK] NVIDIA GPU detected
+            goto :gpu_ok
+        )
+    )
+    
+    if exist "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe" (
+        "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe" --query-gpu=name --format=csv,noheader 2>nul
+        if %errorLevel% equ 0 (
+            echo [OK] NVIDIA GPU detected
+            goto :gpu_ok
+        )
+    )
+    
+    echo [WARNING] NVIDIA GPU not detected automatically
+    echo [INFO] If you have NVIDIA GPU, you can continue anyway
+    echo.
+    set /p CONTINUE="Continue anyway? (y/n): "
+    if /i not "%CONTINUE%"=="y" goto :error
+)
+:gpu_ok
+echo.
+
+:: Step 4: Create directories
+echo [4/6] Creating installation directories...
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 if not exist "%MODEL_DIR%" mkdir "%MODEL_DIR%"
-echo [✓] Directory created: %INSTALL_DIR%
+echo [OK] Directories created
 echo.
 
-:: Step 4: Create virtual environment
-echo [4/6] Setting up Python environment...
+:: Step 5: Create virtual environment
+echo [5/6] Setting up Python virtual environment...
 if not exist "%VENV_DIR%" (
+    echo [INFO] Creating virtual environment...
     python -m venv "%VENV_DIR%"
-    echo [✓] Virtual environment created
+    if %errorLevel% neq 0 (
+        echo [ERROR] Failed to create virtual environment!
+        goto :error
+    )
+    echo [OK] Virtual environment created
 ) else (
-    echo [✓] Virtual environment already exists
+    echo [OK] Virtual environment already exists
 )
+echo.
 
 :: Activate venv
 call "%VENV_DIR%\Scripts\activate.bat"
 
 :: Upgrade pip
+echo [INFO] Upgrading pip...
 python -m pip install --upgrade pip --quiet
+
+:: Step 6: Install dependencies
+echo [6/6] Installing dependencies...
+echo [INFO] This may take 5-10 minutes on first run...
 echo.
 
-:: Step 5: Install dependencies
-echo [5/6] Installing dependencies...
-echo [*] This may take several minutes on first run...
-echo.
+echo [INFO] Installing PyTorch with CUDA support...
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet --disable-pip-version-check
+if %errorLevel% neq 0 (
+    echo [WARNING] PyTorch installation had issues, continuing...
+)
 
-:: Install PyTorch with CUDA support first
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet
-
-:: Install stable-diffusion-cpp-python with CUDA
+echo [INFO] Installing stable-diffusion-cpp-python...
 set CMAKE_ARGS=-DSD_CUDA=ON
-pip install cmake --quiet
-pip install stable-diffusion-cpp-python --quiet
+pip install cmake --quiet --disable-pip-version-check
+pip install stable-diffusion-cpp-python --quiet --disable-pip-version-check
+if %errorLevel% neq 0 (
+    echo [ERROR] Failed to install stable-diffusion-cpp-python!
+    echo [INFO] Try running: pip install stable-diffusion-cpp-python
+    goto :error
+)
 
-:: Install other dependencies
-pip install requests rich pillow platformdirs tqdm huggingface-hub --quiet
+echo [INFO] Installing other dependencies...
+pip install requests pillow tqdm huggingface-hub --quiet --disable-pip-version-check
 
-echo [✓] Dependencies installed
+echo [OK] Dependencies installed
 echo.
 
-:: Step 6: Download model
-echo [6/6] Downloading Z-Image-Turbo model (Q4_0)...
-echo [*] Model size: ~3.68 GB
-echo [*] This may take a while depending on your internet connection...
+:: Download model
+echo ===============================================================
+echo Downloading Z-Image-Turbo Model (Q4_0 - 3.68 GB)
+echo ===============================================================
 echo.
 
 set "MODEL_PATH=%MODEL_DIR%\z_image_turbo-Q4_0.gguf"
 set "MODEL_URL=https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_0.gguf"
 
 if exist "%MODEL_PATH%" (
-    echo [✓] Model already downloaded
-) else (
-    echo [*] Downloading model...
-    powershell -Command "& {"
-    powershell -Command "  $ProgressPreference = 'SilentlyContinue'"
-    powershell -Command "  Write-Host 'Downloading Z-Image-Turbo Q4_0 model...'"
-    powershell -Command "  Invoke-WebRequest -Uri '%MODEL_URL%' -OutFile '%MODEL_PATH%' -UseBasicParsing"
-    powershell -Command "  Write-Host 'Download complete!'"
-    powershell -Command "}"
-    
-    if not exist "%MODEL_PATH%" (
-        echo [ERROR] Model download failed!
-        echo Please check your internet connection and try again.
-        pause
-        exit /b 1
+    for %%A in ("%MODEL_PATH%") do set MODEL_SIZE=%%~zA
+    if %MODEL_SIZE% GTR 3000000000 (
+        echo [OK] Model already downloaded
+        goto :model_done
     )
 )
-echo [✓] Model ready
+
+echo [INFO] Downloading model... This may take 10-30 minutes.
+echo [INFO] Please wait, do not close this window!
 echo.
 
-:: Create launcher scripts
-echo [*] Creating launcher scripts...
+:: Use PowerShell for download with progress
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$url = '%MODEL_URL%'; $output = '%MODEL_PATH%'; $ProgressPreference = 'SilentlyContinue'; Write-Host 'Starting download...'; try { Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing; Write-Host 'Download complete!' } catch { Write-Host 'Download failed:' $_.Exception.Message; exit 1 }"
 
-:: Create run.bat
+if not exist "%MODEL_PATH%" (
+    echo [ERROR] Model download failed!
+    echo.
+    echo Please download manually from:
+    echo %MODEL_URL%
+    echo And save to: %MODEL_PATH%
+    goto :error
+)
+
+:model_done
+echo [OK] Model ready
+echo.
+
+:: Create launcher script
+echo [INFO] Creating launcher scripts...
+
+:: Create run.bat in install dir
 (
 echo @echo off
-echo chcp 65001 ^>nul
+echo chcp 65001 ^>nul 2^>^&1
 echo call "%VENV_DIR%\Scripts\activate.bat"
 echo python "%INSTALL_DIR%\generate.py" %%*
+echo if "%%1"=="" (
+echo     echo.
+echo     echo Usage: run.bat "your prompt here"
+echo     echo Example: run.bat "beautiful sunset"
+echo     pause
+echo ^)
 ) > "%INSTALL_DIR%\run.bat"
 
-:: Create generate.py
-(
-echo """Z-Image Generator - Simple launcher"""
-echo import sys
-echo import os
-echo 
-echo # Add to path
-echo sys.path.insert(0, r'%INSTALL_DIR%\src')
-echo 
-echo # Model path
-echo MODEL_PATH = r'%MODEL_PATH%'
-echo 
-echo def main^(^):
-echo     if len(sys.argv) ^< 2:
-echo         print^("Usage: run.bat \"your prompt here\""^)
-echo         print^("   or: run.bat --interactive"^)
-echo         return
-echo     
-echo     # Import after checking args
-echo     from stable_diffusion_cpp import StableDiffusion
-echo     from PIL import Image
-echo     import datetime
-echo     from pathlib import Path
-echo     
-echo     # Parse arguments
-echo     if sys.argv[1] == "--interactive":
-echo         print^("Interactive mode - coming soon!"^)
-echo         print^("For now, use: run.bat \"your prompt\""^)
-echo         return
-echo     
-echo     prompt = sys.argv[1]
-echo     output_dir = Path.home^(^) / "Downloads"
-echo     
-echo     # Generate timestamp and seed
-echo     timestamp = datetime.datetime.now^(^).strftime^("%%Y%%m%%d_%%H%%M%%S"^)
-echo     import random
-echo     seed = random.randint^(0, 999999^)
-echo     
-echo     output_path = output_dir / f"zimage_{seed}_{timestamp}.png"
-echo     
-echo     print^(f"\nGenerating image..."^)
-echo     print^(f"Prompt: {prompt}"^)
-echo     print^(f"Output: {output_path}"^)
-echo     print^(^)
-echo     
-echo     # Initialize generator with low VRAM settings
-echo     sd = StableDiffusion^(
-echo         model_path=MODEL_PATH,
-echo         offload_params_to_cpu=True,
-echo         flash_attn=True,
-echo         diffusion_flash_attn=True,
-echo         keep_clip_on_cpu=False,
-echo         keep_vae_on_cpu=True,
-echo         vae_decode_only=True,
-echo         verbose=False,
-echo     ^)
-echo     
-echo     # Generate
-echo     import time
-echo     start = time.time^(^)
-echo     
-echo     images = sd.generate_image^(
-echo         prompt=prompt,
-echo         width=768,
-echo         height=512,
-echo         sample_steps=4,
-echo         seed=seed,
-echo         cfg_scale=0.0,
-echo         sample_method="euler_a",
-echo     ^)
-echo     
-echo     elapsed = time.time^(^) - start
-echo     
-echo     if images:
-echo         images[0].save^(output_path^)
-echo         print^(f"✓ Generated in {elapsed:.1f}s"^)
-echo         print^(f"✓ Saved to: {output_path}"^)
-echo     else:
-echo         print^("✗ Generation failed"^)
-echo     
-echo     # Cleanup
-echo     del sd
-echo 
-echo if __name__ == "__main__":
-echo     main^(^)
-) > "%INSTALL_DIR%\generate.py"
+:: Copy generate.py
+copy /Y "%~dp0generate.py" "%INSTALL_DIR%\generate.py" >nul
 
-:: Copy source files
-xcopy /E /I /Y "%~dp0src" "%INSTALL_DIR%\src" >nul 2>&1
-
-echo [✓] Launcher scripts created
+echo [OK] Scripts created
 echo.
 
-:: Create desktop shortcut
-echo [*] Creating desktop shortcut...
-powershell -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut([System.IO.Path]::Combine([Environment]::GetFolderPath('Desktop'), 'Z-Image-Gen.lnk')); $Shortcut.TargetPath = '%INSTALL_DIR%\run.bat'; $Shortcut.WorkingDirectory = '%INSTALL_DIR%'; $Shortcut.Description = 'Z-Image Generator'; $Shortcut.Save()"
+:: Create desktop shortcut using PowerShell
+echo [INFO] Creating desktop shortcut...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\Z-Image-Gen.lnk'); $s.TargetPath = '%INSTALL_DIR%\run.bat'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.Description = 'Z-Image Generator'; $s.Save(); Write-Host 'Desktop shortcut created'"
 
 echo.
-echo ╔═══════════════════════════════════════════════════════════════╗
-echo ║                    INSTALLATION COMPLETE!                     ║
-echo ╚═══════════════════════════════════════════════════════════════╝
+echo ===============================================================
+echo                  INSTALLATION COMPLETE!
+echo ===============================================================
 echo.
 echo   Installation directory: %INSTALL_DIR%
 echo   Model location: %MODEL_PATH%
 echo.
 echo   USAGE:
-echo   ─────────────────────────────────────────────────────────────
-echo   1. Open Command Prompt or PowerShell
-echo   2. Run: "%INSTALL_DIR%\run.bat" "your prompt here"
+echo   ---------------------------------------------------------------
+echo   Open Command Prompt and run:
+echo   "%INSTALL_DIR%\run.bat" "your prompt here"
 echo.
 echo   Example:
-echo      "%INSTALL_DIR%\run.bat" "beautiful sunset over mountains"
+echo   "%INSTALL_DIR%\run.bat" "beautiful sunset over mountains"
 echo.
-echo   Or double-click the desktop shortcut: Z-Image-Gen
+echo   Or use the desktop shortcut: Z-Image-Gen
 echo.
 echo   Images will be saved to your Downloads folder.
-echo ═══════════════════════════════════════════════════════════════
+echo ===============================================================
 echo.
-echo Press any key to test the installation...
+echo Press any key to run a test generation...
 pause >nul
 
 :: Test run
 echo.
-echo [*] Running test generation...
-echo [*] This may take a minute on first run...
+echo [INFO] Running test generation...
+echo [INFO] This may take a minute on first run...
 echo.
-call "%INSTALL_DIR%\run.bat" "test image of a cat"
+call "%INSTALL_DIR%\run.bat" "a cute cat sitting on a windowsill"
 
 echo.
-echo ═══════════════════════════════════════════════════════════════
-echo Installation complete! Check your Downloads folder for the test image.
-echo ═══════════════════════════════════════════════════════════════
+echo ===============================================================
+echo Test complete! Check your Downloads folder for the image.
+echo ===============================================================
 pause
+exit /b 0
+
+:error
+echo.
+echo ===============================================================
+echo                    INSTALLATION FAILED
+echo ===============================================================
+echo.
+echo Please check the errors above and try again.
+echo.
+pause
+exit /b 1
