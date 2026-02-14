@@ -25,7 +25,7 @@ echo.
 echo Step 2: Checking NVIDIA GPU...
 nvidia-smi --query-gpu=name --format=csv,noheader 2>nul
 if %errorLevel% neq 0 (
-    echo WARNING: NVIDIA GPU not detected.
+    echo WARNING: NVIDIA GPU not detected automatically.
     echo If you have NVIDIA GPU, install drivers from:
     echo https://www.nvidia.com/Download/index.aspx
     echo.
@@ -54,29 +54,39 @@ echo OK!
 echo.
 
 echo Step 5: Installing dependencies...
-echo This will take a few minutes...
+echo This will take 5-10 minutes...
 echo.
 
 call "%VENV_DIR%\Scripts\activate.bat"
 
-echo Installing pip...
+echo Ensuring pip is available...
+python -m ensurepip --default-pip 2>nul
 python -m pip install --upgrade pip --quiet
 
-echo Installing PyTorch...
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet
+echo Installing PyTorch with CUDA...
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet --disable-pip-version-check
+if %errorLevel% neq 0 (
+    echo WARNING: PyTorch install had issues, continuing...
+)
 
 echo Installing stable-diffusion-cpp-python...
 set CMAKE_ARGS=-DSD_CUDA=ON
-pip install cmake --quiet
-pip install stable-diffusion-cpp-python --quiet
+pip install cmake --quiet --disable-pip-version-check 2>nul
+pip install stable-diffusion-cpp-python --quiet --disable-pip-version-check
 if %errorLevel% neq 0 (
+    echo.
     echo ERROR: Failed to install stable-diffusion-cpp-python
+    echo.
+    echo Try running manually:
+    echo   %VENV_DIR%\Scripts\activate.bat
+    echo   set CMAKE_ARGS=-DSD_CUDA=ON
+    echo   pip install stable-diffusion-cpp-python
     pause
     exit /b 1
 )
 
 echo Installing other packages...
-pip install requests pillow tqdm --quiet
+pip install requests pillow tqdm --quiet --disable-pip-version-check
 
 echo OK!
 echo.
@@ -93,10 +103,12 @@ echo Downloading... This will take 10-30 minutes.
 echo Do NOT close this window!
 echo.
 
-powershell -Command "Invoke-WebRequest -Uri 'https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_0.gguf' -OutFile '%MODEL_PATH%' -UseBasicParsing"
+powershell -Command "Write-Host 'Starting download...'; Invoke-WebRequest -Uri 'https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_0.gguf' -OutFile '%MODEL_PATH%' -UseBasicParsing; Write-Host 'Download complete!'"
 
 if not exist "%MODEL_PATH%" (
     echo ERROR: Download failed
+    echo Please download manually from:
+    echo https://huggingface.co/leejet/Z-Image-Turbo-GGUF/blob/main/z_image_turbo-Q4_0.gguf
     pause
     exit /b 1
 )
@@ -110,13 +122,16 @@ echo Step 7: Creating launcher...
 :: Copy generate.py
 copy /Y "%~dp0generate.py" "%INSTALL_DIR%\generate.py" >nul
 
-:: Create run.bat
+:: Create run.bat in install dir
 (
 echo @echo off
 echo call "%VENV_DIR%\Scripts\activate.bat"
 echo python "%INSTALL_DIR%\generate.py" %%*
 echo if "%%1"=="" pause
 ) > "%INSTALL_DIR%\run.bat"
+
+:: Create desktop shortcut
+powershell -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\Z-Image-Gen.lnk'); $s.TargetPath = '%INSTALL_DIR%\run.bat'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.Save()"
 
 echo OK!
 echo.
@@ -129,13 +144,15 @@ echo To generate images, run:
 echo   %INSTALL_DIR%\run.bat "your prompt here"
 echo.
 echo Example:
-echo   %INSTALL_DIR%\run.bat "beautiful sunset"
+echo   %INSTALL_DIR%\run.bat "beautiful sunset over mountains"
+echo.
+echo Or use desktop shortcut: Z-Image-Gen
 echo.
 echo Images will be saved to your Downloads folder.
 echo =====================================================
 echo.
-echo Press any key to test...
+echo Press any key to test generation...
 pause >nul
 
-call "%INSTALL_DIR%\run.bat" "a cute cat"
+call "%INSTALL_DIR%\run.bat" "a cute cat sitting on a windowsill"
 pause

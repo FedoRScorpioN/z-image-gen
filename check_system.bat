@@ -19,9 +19,9 @@ if %errorLevel% neq 0 (
 echo.
 
 echo [pip]
-pip --version 2>nul
+python -m pip --version 2>nul
 if %errorLevel% neq 0 (
-    echo NOT AVAILABLE
+    echo NOT AVAILABLE - will be installed during setup
 ) else (
     echo OK
 )
@@ -44,6 +44,6 @@ echo Required: ~5 GB
 echo.
 
 echo =====================================================
-echo If all checks show OK, run install.bat
+echo If Python and GPU are OK, run install.bat
 echo =====================================================
 pause
