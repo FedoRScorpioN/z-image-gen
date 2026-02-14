@@ -16,14 +16,14 @@ from pathlib import Path
 DEFAULT_WIDTH = 768
 DEFAULT_HEIGHT = 512
 
-# URLs - Windows CUDA 12 build
-SD_CLI_URL = "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-504-636d3cb/cudart-sd-bin-win-cu12-x64.zip"
+# URLs
+SD_CLI_URL = "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-504-636d3cb/sd-master-636d3cb-bin-win-cuda12-x64.zip"
 
-# Model URLs from HuggingFace
+# Model URLs (correct sources)
 MODEL_URLS = {
     "diffusion": "https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_0.gguf",
-    "vae": "https://huggingface.co/leejet/Z-Image-GGUF/resolve/main/ae.safetensors", 
-    "llm": "https://huggingface.co/leejet/Z-Image-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    "vae": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+    "llm": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
 }
 
 
@@ -112,23 +112,34 @@ def download_file(url, dest, name="file"):
         return False
 
 
+def find_sd_cli(base):
+    """Find sd-cli.exe in the installation."""
+    bin_dir = base / "bin"
+    
+    # Expected locations
+    possible = [
+        bin_dir / "Release" / "sd-cli.exe",
+        bin_dir / "sd-cli.exe",
+        bin_dir / "build" / "bin" / "Release" / "sd-cli.exe",
+    ]
+    
+    for p in possible:
+        if p.exists():
+            return p
+    
+    # Search recursively
+    if bin_dir.exists():
+        for f in bin_dir.rglob("sd-cli.exe"):
+            return f
+    
+    return None
+
+
 def check_installation():
     """Check if all required files exist."""
     base = get_base_path()
     
-    # Look for sd-cli.exe in different possible locations
-    possible_sd_cli = [
-        base / "bin" / "Release" / "sd-cli.exe",
-        base / "bin" / "sd-cli.exe",
-        base / "bin" / "build" / "bin" / "Release" / "sd-cli.exe",
-    ]
-    
-    sd_cli = None
-    for p in possible_sd_cli:
-        if p.exists():
-            sd_cli = p
-            break
-    
+    sd_cli = find_sd_cli(base)
     diffusion = base / "models" / "z_image_turbo-Q4_0.gguf"
     vae = base / "models" / "ae.safetensors"
     llm = base / "models" / "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
@@ -145,7 +156,11 @@ def check_installation():
         all_ok = False
     
     # Check models
-    for name, path in [("diffusion model", diffusion), ("VAE", vae), ("LLM", llm)]:
+    for name, path in [
+        ("diffusion model", diffusion),
+        ("VAE", vae),
+        ("LLM/text encoder", llm),
+    ]:
         if path.exists():
             size_mb = path.stat().st_size / (1024 * 1024)
             print(f"  [OK] {name}: {size_mb:.1f} MB")
@@ -154,26 +169,6 @@ def check_installation():
             all_ok = False
     
     return all_ok
-
-
-def find_sd_cli(base):
-    """Find sd-cli.exe in the installation."""
-    possible = [
-        base / "bin" / "Release" / "sd-cli.exe",
-        base / "bin" / "sd-cli.exe",
-    ]
-    
-    # Search recursively
-    bin_dir = base / "bin"
-    if bin_dir.exists():
-        for f in bin_dir.rglob("sd-cli.exe"):
-            return f
-    
-    for p in possible:
-        if p.exists():
-            return p
-    
-    return None
 
 
 def install():
@@ -198,7 +193,7 @@ def install():
         print("\n[1/4] Downloading sd-cli (CUDA 12 for Windows)...")
         zip_path = base / "sd-cli.zip"
         
-        if not download_file(SD_CLI_URL, zip_path, "stable-diffusion.cpp binaries"):
+        if not download_file(SD_CLI_URL, zip_path, "stable-diffusion.cpp"):
             print("Failed to download sd-cli!")
             return False
         
@@ -212,31 +207,30 @@ def install():
             print(f"  ERROR extracting: {e}")
             return False
         
-        # Find where sd-cli.exe ended up
         sd_cli = find_sd_cli(base)
         if sd_cli:
-            print(f"  Found at: {sd_cli.relative_to(base)}")
+            print(f"  Found sd-cli.exe at: {sd_cli.relative_to(base)}")
         else:
-            print("  WARNING: sd-cli.exe not found after extraction!")
             print("  Contents of bin directory:")
             for f in bin_dir.rglob("*"):
                 if f.is_file():
                     print(f"    {f.relative_to(bin_dir)}")
     else:
-        print(f"\n[1/4] sd-cli.exe already exists at {sd_cli.relative_to(base)}")
+        print(f"\n[1/4] sd-cli.exe already exists")
     
     # Download models
     models = [
-        ("diffusion model", "diffusion", MODEL_URLS["diffusion"], "z_image_turbo-Q4_0.gguf"),
-        ("VAE", "vae", MODEL_URLS["vae"], "ae.safetensors"),
-        ("LLM encoder", "llm", MODEL_URLS["llm"], "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
+        ("diffusion model", MODEL_URLS["diffusion"], "z_image_turbo-Q4_0.gguf"),
+        ("VAE", MODEL_URLS["vae"], "ae.safetensors"),
+        ("LLM/text encoder", MODEL_URLS["llm"], "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
     ]
     
-    for i, (name, key, url, filename) in enumerate(models, 2):
+    for i, (name, url, filename) in enumerate(models, 2):
         dest = models_dir / filename
         
         if dest.exists() and dest.stat().st_size > 1000000:
-            print(f"\n[{i}/4] {name} already exists")
+            size_mb = dest.stat().st_size / (1024 * 1024)
+            print(f"\n[{i}/4] {name} already exists ({size_mb:.0f} MB)")
         else:
             print(f"\n[{i}/4] Downloading {name}...")
             if not download_file(url, dest, name):
@@ -246,9 +240,7 @@ def install():
     print("Installation complete!")
     print("=" * 60)
     
-    # Verify
     check_installation()
-    
     return True
 
 
@@ -306,10 +298,10 @@ def generate(prompt, output_path=None, width=DEFAULT_WIDTH, height=DEFAULT_HEIGH
         "--llm", str(llm),
         "-p", prompt,
         "--cfg-scale", "1.0",
-        "--offload-to-cpu",      # Offload weights to RAM
-        "--diffusion-fa",        # Flash attention
-        "--vae-tiling",          # Tiled VAE for low VRAM
-        "--clip-on-cpu",         # Keep CLIP on CPU
+        "--offload-to-cpu",
+        "--diffusion-fa",
+        "--vae-tiling",
+        "--clip-on-cpu",
         "-W", str(width),
         "-H", str(height),
         "-o", str(output_path),
@@ -318,7 +310,6 @@ def generate(prompt, output_path=None, width=DEFAULT_WIDTH, height=DEFAULT_HEIGH
     if seed >= 0:
         cmd.extend(["--seed", str(seed)])
     
-    # Run
     start = datetime.datetime.now()
     
     try:
@@ -376,12 +367,10 @@ Examples:
         print("\nRun 'python generate.py --install' first to download required files.")
         return 0
     
-    # Check installation
     if not check_installation():
         print("\nMissing files! Run: python generate.py --install")
         return 1
     
-    # Generate
     success = generate(
         prompt=args.prompt,
         output_path=args.output,
