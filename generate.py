@@ -276,7 +276,7 @@ def install():
     return True
 
 
-def generate(prompt, output_path=None, width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, seed=-1):
+def generate(prompt, output_path=None, width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, seed=-1, return_path=False):
     """Generate an image using sd-cli.exe."""
     base = get_base_path()
     models_dir = base / "models"
@@ -353,14 +353,100 @@ def generate(prompt, output_path=None, width=DEFAULT_WIDTH, height=DEFAULT_HEIGH
         if output_path.exists():
             print(f"\n[OK] Generated in {elapsed:.1f}s")
             print(f"Saved to: {output_path}")
+            if return_path:
+                return True, output_path
             return True
         else:
             print(f"\n[ERROR] Output file not created")
+            if return_path:
+                return False, None
             return False
             
     except Exception as e:
         print(f"\n[ERROR] {e}")
+        if return_path:
+            return False, None
         return False
+
+
+def interactive_mode(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT):
+    """Interactive mode - generate images in a loop."""
+    print("\n" + "=" * 60)
+    print("  Z-Image Generator - Interactive Mode")
+    print("=" * 60)
+    print(f"\nImage size: {width}x{height}")
+    print("\nCommands:")
+    print("  <prompt>    - Generate image from text")
+    print("  size WxH    - Change size (e.g., size 1024x576)")
+    print("  check       - Check installation")
+    print("  help        - Show this help")
+    print("  quit/exit   - Exit program")
+    print("\nImages are saved to your Downloads folder.")
+    print("-" * 60)
+    
+    generated_count = 0
+    last_output = None
+    
+    while True:
+        try:
+            print()
+            prompt = input("Enter prompt> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n\nGoodbye!")
+            break
+        
+        if not prompt:
+            continue
+        
+        # Commands
+        if prompt.lower() in ('quit', 'exit', 'q'):
+            print(f"\nGenerated {generated_count} image(s). Goodbye!")
+            break
+        
+        if prompt.lower() == 'help':
+            print("\nCommands:")
+            print("  <prompt>    - Generate image from text")
+            print("  size WxH    - Change size (e.g., size 1024x576)")
+            print("  check       - Check installation")
+            print("  help        - Show this help")
+            print("  quit/exit   - Exit program")
+            continue
+        
+        if prompt.lower() == 'check':
+            check_installation()
+            continue
+        
+        if prompt.lower().startswith('size '):
+            try:
+                size_part = prompt[5:].strip().lower()
+                if 'x' in size_part:
+                    w, h = size_part.split('x')
+                    width = int(w.strip())
+                    height = int(h.strip())
+                    print(f"Size changed to {width}x{height}")
+                else:
+                    print("Usage: size 1024x576")
+            except:
+                print("Invalid size. Usage: size 1024x576")
+            continue
+        
+        # Generate image
+        print("\n" + "-" * 60)
+        success, output_path = generate(
+            prompt=prompt,
+            width=width,
+            height=height,
+            return_path=True
+        )
+        
+        if success:
+            generated_count += 1
+            last_output = output_path
+            print("\n" + "=" * 60)
+            print(f"  SAVED: {output_path}")
+            print("=" * 60)
+    
+    return 0
 
 
 def main():
@@ -373,6 +459,7 @@ Examples:
   python generate.py "cyberpunk city" --width 1024 --height 576
   python generate.py --install
   python generate.py --check
+  python generate.py --interactive
         """
     )
     
@@ -383,6 +470,7 @@ Examples:
     parser.add_argument("-o", "--output", help="Output path")
     parser.add_argument("--install", action="store_true", help="Download all files")
     parser.add_argument("--check", action="store_true", help="Check installation")
+    parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode")
     
     args = parser.parse_args()
     
@@ -394,10 +482,12 @@ Examples:
         ok = install()
         return 0 if ok else 1
     
-    if not args.prompt:
-        parser.print_help()
-        print("\nRun 'python generate.py --install' first to download required files.")
-        return 0
+    # Interactive mode
+    if args.interactive or not args.prompt:
+        if not check_installation():
+            print("\nMissing files! Run: python generate.py --install")
+            return 1
+        return interactive_mode(width=args.width, height=args.height)
     
     if not check_installation():
         print("\nMissing files! Run: python generate.py --install")
