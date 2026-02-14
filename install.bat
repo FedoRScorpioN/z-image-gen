@@ -63,26 +63,25 @@ echo Ensuring pip is available...
 python -m ensurepip --default-pip 2>nul
 python -m pip install --upgrade pip --quiet
 
-echo Installing PyTorch with CUDA...
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet --disable-pip-version-check
+echo Installing PyTorch (CUDA version)...
+echo Trying standard PyPI first...
+pip install torch torchvision torchaudio --quiet --disable-pip-version-check
 if %errorLevel% neq 0 (
-    echo WARNING: PyTorch install had issues, continuing...
+    echo Standard install failed, trying with CUDA index...
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 --quiet --disable-pip-version-check
 )
 
-echo Installing stable-diffusion-cpp-python...
+echo Installing stable-diffusion-cpp-python with CUDA...
 set CMAKE_ARGS=-DSD_CUDA=ON
 pip install cmake --quiet --disable-pip-version-check 2>nul
-pip install stable-diffusion-cpp-python --quiet --disable-pip-version-check
+
+pip install stable-diffusion-cpp-python --verbose
 if %errorLevel% neq 0 (
     echo.
-    echo ERROR: Failed to install stable-diffusion-cpp-python
-    echo.
-    echo Try running manually:
-    echo   %VENV_DIR%\Scripts\activate.bat
-    echo   set CMAKE_ARGS=-DSD_CUDA=ON
-    echo   pip install stable-diffusion-cpp-python
-    pause
-    exit /b 1
+    echo WARNING: stable-diffusion-cpp-python install had issues.
+    echo Trying without CUDA flag...
+    set CMAKE_ARGS=
+    pip install stable-diffusion-cpp-python --verbose
 )
 
 echo Installing other packages...
