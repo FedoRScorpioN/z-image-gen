@@ -13,6 +13,7 @@ if not exist "%INSTALL_DIR%" (
 )
 
 echo Will delete: %INSTALL_DIR%
+echo (~6 GB of data)
 echo.
 choice /C YN /M "Are you sure"
 if %errorLevel% equ 2 exit /b 0

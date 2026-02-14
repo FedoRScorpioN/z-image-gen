@@ -1,98 +1,52 @@
 #!/usr/bin/env python3
 """
-Z-Image Generator - Simple standalone image generator
-Optimized for 4GB VRAM (NVIDIA RTX 3050)
-
-Usage:
-    python generate.py "your prompt here"
-    python generate.py "prompt" --width 1024 --height 576
-    python generate.py --interactive
+Z-Image Generator - Using sd-cli.exe from stable-diffusion.cpp
+Works on 4GB VRAM (RTX 3050)
 """
 
 import os
 import sys
-import random
+import subprocess
 import datetime
 import argparse
-import time
+import random
 from pathlib import Path
 
 # Configuration
 DEFAULT_WIDTH = 768
 DEFAULT_HEIGHT = 512
-DEFAULT_STEPS = 4
 
-# Model URLs
+# URLs - Windows CUDA 12 build
+SD_CLI_URL = "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-504-636d3cb/cudart-sd-bin-win-cu12-x64.zip"
+
+# Model URLs from HuggingFace
 MODEL_URLS = {
-    "q4_0": "https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_0.gguf",
+    "diffusion": "https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_0.gguf",
+    "vae": "https://huggingface.co/leejet/Z-Image-GGUF/resolve/main/ae.safetensors", 
+    "llm": "https://huggingface.co/leejet/Z-Image-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
 }
-MODEL_SIZES = {
-    "q4_0": "3.68 GB",
-}
 
 
-def print_error(msg):
-    """Print error message."""
-    print(f"\n[ERROR] {msg}\n")
-
-
-def print_info(msg):
-    """Print info message."""
-    print(f"[INFO] {msg}")
-
-
-def print_ok(msg):
-    """Print success message."""
-    print(f"[OK] {msg}")
-
-
-def check_dependencies():
-    """Check and import dependencies with helpful error messages."""
-    global StableDiffusion, Image, tqdm
-    
-    # Check stable-diffusion-cpp-python
-    try:
-        from stable_diffusion_cpp import StableDiffusion
-    except ImportError:
-        print_error("stable-diffusion-cpp-python is not installed!")
-        print("To install, run:")
-        print("  pip install stable-diffusion-cpp-python")
-        print("\nFor CUDA support:")
-        print("  set CMAKE_ARGS=-DSD_CUDA=ON")
-        print("  pip install stable-diffusion-cpp-python")
-        sys.exit(1)
-    
-    # Check Pillow
-    try:
-        from PIL import Image
-    except ImportError:
-        print_error("Pillow is not installed!")
-        print("To install, run: pip install pillow")
-        sys.exit(1)
-    
-    # Check tqdm (optional, for download progress)
-    try:
-        from tqdm import tqdm
-    except ImportError:
-        tqdm = None
+def get_base_path():
+    """Get installation directory."""
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA", "")) / "z-image-gen"
+    return Path.home() / ".local" / "z-image-gen"
 
 
 def get_downloads_folder():
-    """Get the Windows Downloads folder path."""
-    # Try Windows API
+    """Get Windows Downloads folder."""
     if sys.platform == "win32":
         try:
             import ctypes
             from ctypes import wintypes
             
-            # CoInitialize
+            FOLDERID_Downloads = "{374DE290-123F-4565-9164-2C9AA0BAD945}"
+            
             try:
                 ctypes.windll.ole32.CoInitialize(None)
             except:
                 pass
-            
-            # Get Downloads folder
-            FOLDERID_Downloads = "{374DE290-123F-4565-9164-2C9AA0BAD945}"
             
             SHGetKnownFolderPath = ctypes.windll.shell32.SHGetKnownFolderPath
             SHGetKnownFolderPath.argtypes = [
@@ -113,305 +67,326 @@ def get_downloads_folder():
             
             if hr == 0 and pszPath.value:
                 return Path(pszPath.value)
-        except Exception:
+        except:
             pass
     
-    # Fallback
     downloads = Path.home() / "Downloads"
     if downloads.exists():
         return downloads
     return Path.home()
 
 
-def get_model_path():
-    """Get the path to the model file, downloading if necessary."""
-    # Possible model locations
-    possible_paths = [
-        Path(os.environ.get("LOCALAPPDATA", "")) / "z-image-gen" / "models" / "z_image_turbo-Q4_0.gguf",
-        Path.home() / ".cache" / "z-image-gen" / "models" / "z_image_turbo-Q4_0.gguf",
-        Path(__file__).parent / "models" / "z_image_turbo-Q4_0.gguf",
-    ]
+def download_file(url, dest, name="file"):
+    """Download a file with progress."""
+    import requests
     
-    # Check if model exists (at least 1GB)
-    for path in possible_paths:
-        try:
-            if path.exists() and path.stat().st_size > 1_000_000_000:
-                return path
-        except:
-            continue
+    print(f"\nDownloading {name}...")
+    print(f"  URL: {url}")
+    print(f"  To: {dest}")
     
-    # Model not found, need to download
-    model_path = possible_paths[0]
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    url = MODEL_URLS["q4_0"]
-    size = MODEL_SIZES["q4_0"]
-    
-    print(f"\n{'='*60}")
-    print("Model not found. Downloading Z-Image-Turbo Q4_0...")
-    print(f"Size: {size}")
-    print("This may take 10-30 minutes depending on your internet...")
-    print(f"{'='*60}\n")
+    dest.parent.mkdir(parents=True, exist_ok=True)
     
     try:
-        import requests
-        
-        response = requests.get(url, stream=True, timeout=30)
+        response = requests.get(url, stream=True, timeout=60)
         response.raise_for_status()
         
-        total_size = int(response.headers.get('content-length', 0))
+        total = int(response.headers.get('content-length', 0))
         downloaded = 0
         
-        with open(model_path, 'wb') as f:
-            if tqdm and total_size > 0:
-                with tqdm(total=total_size, unit='B', unit_scale=True, desc="Downloading") as pbar:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            pbar.update(len(chunk))
-            else:
-                print("Downloading... (no progress bar available)")
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        # Show progress every 100MB
-                        if downloaded % (100 * 1024 * 1024) == 0:
-                            mb = downloaded / (1024 * 1024)
-                            print(f"  Downloaded: {mb:.0f} MB")
+        with open(dest, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=65536):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        mb = downloaded / (1024 * 1024)
+                        total_mb = total / (1024 * 1024)
+                        pct = (downloaded / total) * 100
+                        print(f"\r  Progress: {mb:.1f} / {total_mb:.1f} MB ({pct:.0f}%)", end="", flush=True)
         
-        print(f"\n[OK] Model downloaded to: {model_path}\n")
-        return model_path
+        print(f"\n  Done! ({downloaded / (1024*1024):.1f} MB)")
+        return True
         
     except Exception as e:
-        print_error(f"Download failed: {e}")
-        print(f"\nPlease download manually from:")
-        print(f"  {url}")
-        print(f"And save to: {model_path}")
-        sys.exit(1)
-
-
-def generate_image(
-    prompt,
-    model_path,
-    output_path,
-    width=DEFAULT_WIDTH,
-    height=DEFAULT_HEIGHT,
-    steps=DEFAULT_STEPS,
-    seed=-1,
-):
-    """Generate an image from a prompt."""
-    
-    # Generate seed if not provided
-    if seed < 0:
-        seed = random.randint(0, 999999)
-    
-    print(f"\n{'='*60}")
-    print("Generating image...")
-    print(f"{'='*60}")
-    print(f"Prompt: {prompt}")
-    print(f"Size: {width}x{height} | Steps: {steps} | Seed: {seed}")
-    print()
-    
-    try:
-        # Initialize with low VRAM settings
-        print_info("Loading model (first run may take a minute)...")
-        
-        sd = StableDiffusion(
-            model_path=str(model_path),
-            offload_params_to_cpu=True,      # Offload to RAM
-            flash_attn=True,                  # Flash attention
-            diffusion_flash_attn=True,        # Flash attention for diffusion
-            keep_clip_on_cpu=False,           # Keep text encoder on GPU
-            keep_vae_on_cpu=True,             # VAE on CPU to save VRAM
-            vae_decode_only=True,             # VAE decode only
-            verbose=False,
-        )
-        
-        print_info("Model loaded. Generating...")
-        start_time = time.time()
-        
-        # Generate
-        images = sd.generate_image(
-            prompt=prompt,
-            width=width,
-            height=height,
-            sample_steps=steps,
-            seed=seed,
-            cfg_scale=0.0,  # Turbo doesn't need guidance
-            sample_method="euler_a",
-        )
-        
-        elapsed = time.time() - start_time
-        
-        if images:
-            # Ensure output directory exists
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Save image
-            images[0].save(output_path)
-            
-            print()
-            print_ok(f"Generated in {elapsed:.1f} seconds")
-            print_ok(f"Saved to: {output_path}")
-            
-            # Cleanup
-            del sd
-            
-            return True
-        else:
-            print_error("Generation failed - no output from model")
-            return False
-            
-    except Exception as e:
-        print_error(f"Generation error: {e}")
+        print(f"\n  ERROR: {e}")
         return False
 
 
-def interactive_mode(model_path):
-    """Run in interactive mode."""
-    print(f"\n{'='*60}")
-    print("       Z-Image Generator - Interactive Mode")
-    print(f"{'='*60}")
-    print("\nEnter prompts to generate images. Type 'quit' to exit.\n")
+def check_installation():
+    """Check if all required files exist."""
+    base = get_base_path()
     
-    count = 0
-    output_dir = get_downloads_folder()
+    # Look for sd-cli.exe in different possible locations
+    possible_sd_cli = [
+        base / "bin" / "Release" / "sd-cli.exe",
+        base / "bin" / "sd-cli.exe",
+        base / "bin" / "build" / "bin" / "Release" / "sd-cli.exe",
+    ]
     
-    while True:
-        try:
-            prompt = input("\nPrompt (or 'quit'): ").strip()
-            
-            if prompt.lower() in ('quit', 'exit', 'q'):
-                break
-            
-            if not prompt:
-                print("Please enter a prompt.")
-                continue
-            
-            # Generate
-            seed = random.randint(0, 999999)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = output_dir / f"zimage_{seed}_{timestamp}.png"
-            
-            if generate_image(prompt, model_path, output_path, seed=seed):
-                count += 1
-                
-        except KeyboardInterrupt:
-            print("\n\nInterrupted.")
+    sd_cli = None
+    for p in possible_sd_cli:
+        if p.exists():
+            sd_cli = p
             break
     
-    print(f"\nSession ended. Generated {count} image(s).")
+    diffusion = base / "models" / "z_image_turbo-Q4_0.gguf"
+    vae = base / "models" / "ae.safetensors"
+    llm = base / "models" / "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+    
+    print("\nChecking installation...")
+    all_ok = True
+    
+    # Check sd-cli
+    if sd_cli:
+        size_mb = sd_cli.stat().st_size / (1024 * 1024)
+        print(f"  [OK] sd-cli.exe: {size_mb:.1f} MB ({sd_cli.relative_to(base)})")
+    else:
+        print(f"  [MISSING] sd-cli.exe")
+        all_ok = False
+    
+    # Check models
+    for name, path in [("diffusion model", diffusion), ("VAE", vae), ("LLM", llm)]:
+        if path.exists():
+            size_mb = path.stat().st_size / (1024 * 1024)
+            print(f"  [OK] {name}: {size_mb:.1f} MB")
+        else:
+            print(f"  [MISSING] {name}")
+            all_ok = False
+    
+    return all_ok
+
+
+def find_sd_cli(base):
+    """Find sd-cli.exe in the installation."""
+    possible = [
+        base / "bin" / "Release" / "sd-cli.exe",
+        base / "bin" / "sd-cli.exe",
+    ]
+    
+    # Search recursively
+    bin_dir = base / "bin"
+    if bin_dir.exists():
+        for f in bin_dir.rglob("sd-cli.exe"):
+            return f
+    
+    for p in possible:
+        if p.exists():
+            return p
+    
+    return None
+
+
+def install():
+    """Download and install all required files."""
+    import requests
+    import zipfile
+    
+    base = get_base_path()
+    bin_dir = base / "bin"
+    models_dir = base / "models"
+    
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    
+    print("=" * 60)
+    print("Z-Image Generator - Installation")
+    print("=" * 60)
+    
+    # Download sd-cli
+    sd_cli = find_sd_cli(base)
+    if not sd_cli:
+        print("\n[1/4] Downloading sd-cli (CUDA 12 for Windows)...")
+        zip_path = base / "sd-cli.zip"
+        
+        if not download_file(SD_CLI_URL, zip_path, "stable-diffusion.cpp binaries"):
+            print("Failed to download sd-cli!")
+            return False
+        
+        print("\nExtracting...")
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                zf.extractall(bin_dir)
+            zip_path.unlink()
+            print("  Done!")
+        except Exception as e:
+            print(f"  ERROR extracting: {e}")
+            return False
+        
+        # Find where sd-cli.exe ended up
+        sd_cli = find_sd_cli(base)
+        if sd_cli:
+            print(f"  Found at: {sd_cli.relative_to(base)}")
+        else:
+            print("  WARNING: sd-cli.exe not found after extraction!")
+            print("  Contents of bin directory:")
+            for f in bin_dir.rglob("*"):
+                if f.is_file():
+                    print(f"    {f.relative_to(bin_dir)}")
+    else:
+        print(f"\n[1/4] sd-cli.exe already exists at {sd_cli.relative_to(base)}")
+    
+    # Download models
+    models = [
+        ("diffusion model", "diffusion", MODEL_URLS["diffusion"], "z_image_turbo-Q4_0.gguf"),
+        ("VAE", "vae", MODEL_URLS["vae"], "ae.safetensors"),
+        ("LLM encoder", "llm", MODEL_URLS["llm"], "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
+    ]
+    
+    for i, (name, key, url, filename) in enumerate(models, 2):
+        dest = models_dir / filename
+        
+        if dest.exists() and dest.stat().st_size > 1000000:
+            print(f"\n[{i}/4] {name} already exists")
+        else:
+            print(f"\n[{i}/4] Downloading {name}...")
+            if not download_file(url, dest, name):
+                print(f"  WARNING: Failed to download {name}")
+    
+    print("\n" + "=" * 60)
+    print("Installation complete!")
+    print("=" * 60)
+    
+    # Verify
+    check_installation()
+    
+    return True
+
+
+def generate(prompt, output_path=None, width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, seed=-1):
+    """Generate an image using sd-cli.exe."""
+    base = get_base_path()
+    models_dir = base / "models"
+    
+    sd_cli = find_sd_cli(base)
+    diffusion = models_dir / "z_image_turbo-Q4_0.gguf"
+    vae = models_dir / "ae.safetensors"
+    llm = models_dir / "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+    
+    # Check files exist
+    if not sd_cli:
+        print("ERROR: sd-cli.exe not found. Run with --install first.")
+        return False
+    
+    if not diffusion.exists():
+        print(f"ERROR: Diffusion model not found: {diffusion}")
+        return False
+    
+    if not vae.exists():
+        print(f"ERROR: VAE not found: {vae}")
+        return False
+    
+    if not llm.exists():
+        print(f"ERROR: LLM not found: {llm}")
+        return False
+    
+    # Output path
+    if output_path is None:
+        downloads = get_downloads_folder()
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        if seed < 0:
+            seed = random.randint(0, 999999)
+        output_path = downloads / f"zimage_{seed}_{timestamp}.png"
+    else:
+        output_path = Path(output_path)
+    
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    print(f"\nGenerating image...")
+    print(f"  Prompt: {prompt}")
+    print(f"  Size: {width}x{height}")
+    print(f"  Seed: {seed}")
+    print(f"  Output: {output_path}")
+    print()
+    
+    # Build command - optimized for 4GB VRAM
+    cmd = [
+        str(sd_cli),
+        "--diffusion-model", str(diffusion),
+        "--vae", str(vae),
+        "--llm", str(llm),
+        "-p", prompt,
+        "--cfg-scale", "1.0",
+        "--offload-to-cpu",      # Offload weights to RAM
+        "--diffusion-fa",        # Flash attention
+        "--vae-tiling",          # Tiled VAE for low VRAM
+        "--clip-on-cpu",         # Keep CLIP on CPU
+        "-W", str(width),
+        "-H", str(height),
+        "-o", str(output_path),
+    ]
+    
+    if seed >= 0:
+        cmd.extend(["--seed", str(seed)])
+    
+    # Run
+    start = datetime.datetime.now()
+    
+    try:
+        print("Running sd-cli...")
+        result = subprocess.run(cmd, cwd=str(sd_cli.parent))
+        
+        elapsed = (datetime.datetime.now() - start).total_seconds()
+        
+        if output_path.exists():
+            print(f"\n[OK] Generated in {elapsed:.1f}s")
+            print(f"Saved to: {output_path}")
+            return True
+        else:
+            print(f"\n[ERROR] Output file not created")
+            return False
+            
+    except Exception as e:
+        print(f"\n[ERROR] {e}")
+        return False
 
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="z-image-gen",
-        description="Local AI image generation with Z-Image model",
+        description="Z-Image Generator - Local AI image generation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python generate.py "beautiful sunset over mountains"
   python generate.py "cyberpunk city" --width 1024 --height 576
-  python generate.py "cat" --seed 42
-  python generate.py --interactive
-        """,
+  python generate.py --install
+  python generate.py --check
+        """
     )
     
-    parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Text prompt for image generation",
-    )
-    parser.add_argument(
-        "-w", "--width",
-        type=int,
-        default=DEFAULT_WIDTH,
-        help=f"Image width (default: {DEFAULT_WIDTH})",
-    )
-    parser.add_argument(
-        "-H", "--height",
-        type=int,
-        default=DEFAULT_HEIGHT,
-        help=f"Image height (default: {DEFAULT_HEIGHT})",
-    )
-    parser.add_argument(
-        "-s", "--steps",
-        type=int,
-        default=DEFAULT_STEPS,
-        help=f"Sampling steps (default: {DEFAULT_STEPS})",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=-1,
-        help="Random seed (-1 for random)",
-    )
-    parser.add_argument(
-        "-o", "--output",
-        type=Path,
-        help="Output file path",
-    )
-    parser.add_argument(
-        "-i", "--interactive",
-        action="store_true",
-        help="Run in interactive mode",
-    )
-    parser.add_argument(
-        "--download-model",
-        action="store_true",
-        help="Download model without generating",
-    )
+    parser.add_argument("prompt", nargs="?", help="Text prompt")
+    parser.add_argument("-w", "--width", type=int, default=DEFAULT_WIDTH)
+    parser.add_argument("-H", "--height", type=int, default=DEFAULT_HEIGHT)
+    parser.add_argument("--seed", type=int, default=-1)
+    parser.add_argument("-o", "--output", help="Output path")
+    parser.add_argument("--install", action="store_true", help="Download all files")
+    parser.add_argument("--check", action="store_true", help="Check installation")
     
-    # Parse arguments
     args = parser.parse_args()
     
-    # Check dependencies
-    check_dependencies()
+    if args.check:
+        ok = check_installation()
+        return 0 if ok else 1
     
-    # Get model path
-    model_path = get_model_path()
+    if args.install:
+        ok = install()
+        return 0 if ok else 1
     
-    # Just download model
-    if args.download_model:
-        print_ok(f"Model ready: {model_path}")
-        return 0
-    
-    # Interactive mode
-    if args.interactive:
-        interactive_mode(model_path)
-        return 0
-    
-    # Need a prompt
     if not args.prompt:
         parser.print_help()
-        print("\n" + "="*60)
-        print("QUICK START:")
-        print("  run.bat \"your prompt here\"")
-        print("\nExample:")
-        print("  run.bat \"beautiful sunset over mountains\"")
-        print("="*60)
+        print("\nRun 'python generate.py --install' first to download required files.")
         return 0
     
-    # Generate single image
-    output_dir = get_downloads_folder()
+    # Check installation
+    if not check_installation():
+        print("\nMissing files! Run: python generate.py --install")
+        return 1
     
-    # Determine output path
-    if args.output:
-        output_path = args.output
-    else:
-        seed = args.seed if args.seed >= 0 else random.randint(0, 999999)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = output_dir / f"zimage_{seed}_{timestamp}.png"
-    
-    success = generate_image(
+    # Generate
+    success = generate(
         prompt=args.prompt,
-        model_path=model_path,
-        output_path=output_path,
+        output_path=args.output,
         width=args.width,
         height=args.height,
-        steps=args.steps,
         seed=args.seed,
     )
     
@@ -419,8 +394,4 @@ Examples:
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except KeyboardInterrupt:
-        print("\n\nInterrupted by user.")
-        sys.exit(1)
+    sys.exit(main())
